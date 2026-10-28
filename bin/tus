@@ -66,6 +66,28 @@ function join { local IFS="$1"; shift
   echo "$*";
 }
 
+function resolve_tus_location {
+  local location="${1}"
+
+  case "${location}" in
+    http://*|https://*)
+      echo "${location}"
+      ;;
+    '')
+      echo ""
+      ;;
+    *)
+      if [ -n "${TUS_BASE_URL}" ] && [ "${location:0:1}" = "/" ]; then
+        echo "${TUS_BASE_URL}${location}"
+      elif [ -n "${TUS_BASE_URL}" ]; then
+        echo "${TUS_BASE_URL%/}/${location#/}"
+      else
+        echo "${location}"
+      fi
+      ;;
+  esac
+}
+
 # ==============================================================================
 # tus
 tus_location=$(mktemp -u)
@@ -82,7 +104,9 @@ function tus_options {
 }
 
 function tus_supports {
-  echo "${TUS_OPTIONS[@]}" | grep -qE "^Tus-Extension:.*[, ]${1}[,$]" \
+  echo "${TUS_OPTIONS[@]}" \
+    | tr -d '\r' \
+    | grep -qE "^Tus-Extension:.*[, ]${1}" \
     || error "${2}.\n\033[2m↳ See tusd options: \033[1;34m${0} -o\033[0m"
 }
 
@@ -244,9 +268,6 @@ do
       echo "${OPTARG}" | grep -vq '^[[:digit:]]*$' \
         && usage
       TUS_PARALLEL="${OPTARG}"
-
-      [ ${TUS_PARALLEL} -gt 1 ] \
-        && tus_supports "concatenation" "Tusd can not perform parallel uploads"
     ;;
     H)
       TUS_HEADERS+=("${OPTARG}")
@@ -263,7 +284,11 @@ done
 shift $((OPTIND - 1))
 
 [ -z "${TUSD}" ] && error 'tusd endpoint' 'TUSD'
+TUS_BASE_URL="$(printf '%s' "${TUSD}" | sed -E 's#^([a-z]+://[^/]+).*#\1#')"
 readarray -t TUS_OPTIONS <<<"$(tus_options)"
+[ ${TUS_PARALLEL} -gt 1 ] \
+  && tus_supports "concatenation" "Tusd can not perform parallel uploads"
+
 if [ "${OPT_OPTIONS}" -eq 1 ]; then
   echo -e "\033[1;34m➤ ${TUSD} ☁\033[0m\n\033[2m⌄\033[22m"
   if [ -z "${TUS_OPTIONS[*]}" ]; then
@@ -313,6 +338,7 @@ if [ -z "${Location[@]}" ]; then
 
     tus_create "${FILE}" "${length}" "${headers[@]}" || error 'Tus file creation failed'
     read dest < $tus_location
+    dest="$(resolve_tus_location "${dest}")"
     Location[$dest]="${partials}-${i}"
   done
 
@@ -347,5 +373,6 @@ done
 if [ "${TUS_PARALLEL}" -gt 1 ]; then
   tus_concat "${!Location[@]}" || error 'Tus concatenation failed'
   read dest < $tus_location
+  dest="$(resolve_tus_location "${dest}")"
 fi
 tus_done "${dest}"
