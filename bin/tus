@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 2026-10-28 18:59:30
+# 2026-10-28 19:55:54
 set -e
 
 : ${TUSD:=""}
@@ -353,21 +353,26 @@ if [ -z "${Location[@]}" ]; then
     && headers+=("Upload-Concat: partial")
 
   parts_per_partial=$((total_parts / TUS_PARALLEL))
+  remainder_parts=$((total_parts % TUS_PARALLEL))
   start_parts=0
+  start_offset=0
   for i in $(seq ${TUS_PARALLEL}); do
     partials="${parts_per_partial}"
-    if [ "${i}" -eq "${TUS_PARALLEL}" ]; then
-      partials=$(( partials + total_parts - i * parts_per_partial ))
-      length=$(( SIZE - ( TUS_PARALLEL - 1 ) * parts_per_partial * TUS_CHUNK_SIZE ))
-    else
-      length=$(( partials * TUS_CHUNK_SIZE ))
+    if [ "${i}" -le "${remainder_parts}" ]; then
+      partials=$(( partials + 1 ))
     fi
+    [ "${partials}" -eq 0 ] && continue
+
+    length=$(( partials * TUS_CHUNK_SIZE ))
+    remaining_bytes=$(( SIZE - start_offset ))
+    [ "${length}" -gt "${remaining_bytes}" ] && length="${remaining_bytes}"
 
     tus_create "${FILE}" "${length}" "${headers[@]}" || error 'Tus file creation failed'
     read dest < $tus_location
     dest="$(resolve_tus_location "${dest}")"
     Location[$dest]="${partials}-${i}-${start_parts}"
     start_parts=$(( start_parts + partials ))
+    start_offset=$(( start_offset + length ))
   done
 
   # create resumable log file
